@@ -1,0 +1,27 @@
+# macOS
+.DS_Store
+__MACOSX/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# ビルド成果物（配布する場合は Releases に添付する）
+*.skill
+*.zip
+
+# エディタ
+.vscode/
+.idea/
+*.swp
+
+# 申請データ（実在の証明書・CSR・申請ファイルを誤ってコミットしない）
+*.csr
+*.key
+*.crt
+*.pem
+*.tsv
+!examples/*.tsv
