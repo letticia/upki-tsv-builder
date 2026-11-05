@@ -7,7 +7,8 @@
 input.json の形式:
 {
   "type": "server-issue",   # server-issue / server-renew / server-revoke /
-                            # acme-create / acme-renew / acme-suspend / acme-revoke
+                            # acme-create / acme-renew / acme-suspend / acme-revoke /
+                            # ra-renew（登録担当者用証明書 更新）
   "records": [
     {
       "dn": "CN=www.example.ac.jp,O=Example University,L=Chiyoda-ku,ST=Tokyo,C=JP",
@@ -48,18 +49,19 @@ NUM_COLUMNS = 13
 MAX_RECORDS = 99
 REVOKE_REASONS = {"0", "1", "3", "4", "5"}
 PROFILE_IDS = {"3", "11"}
+RA_PROFILE_IDS = {"1"}  # 登録担当者用証明書
 
 # 種別ごとの 列番号 -> (キー名, 必須か) の対応
 SCHEMAS = {
     "server-issue": {
         1: ("dn", True), 2: ("profile_id", True), 7: ("csr", True),
-        8: ("admin_name", False), 9: ("admin_dept", False),
+        8: ("admin_name", True), 9: ("admin_dept", True),
         10: ("admin_mail", True), 11: ("fqdn", True),
         12: ("software", True), 13: ("dnsname", False),
     },
     "server-renew": {
         1: ("dn", True), 2: ("profile_id", True), 4: ("serial", True),
-        7: ("csr", True), 8: ("admin_name", False), 9: ("admin_dept", False),
+        7: ("csr", True), 8: ("admin_name", True), 9: ("admin_dept", True),
         10: ("admin_mail", True), 11: ("fqdn", True),
         12: ("software", True), 13: ("dnsname", False),
     },
@@ -69,13 +71,13 @@ SCHEMAS = {
     },
     "acme-create": {
         1: ("dn", True), 2: ("profile_id", True),
-        8: ("admin_name", False), 9: ("admin_dept", False),
+        8: ("admin_name", True), 9: ("admin_dept", True),
         10: ("admin_mail", True), 11: ("fqdn", True),
         12: ("software", True), 13: ("dnsname", False),
     },
     "acme-renew": {
         1: ("dn", True), 2: ("profile_id", True), 3: ("acme_account_id", True),
-        8: ("admin_name", False), 9: ("admin_dept", False),
+        8: ("admin_name", True), 9: ("admin_dept", True),
         10: ("admin_mail", True), 11: ("fqdn", True),
         12: ("software", True), 13: ("dnsname", False),
     },
@@ -87,6 +89,10 @@ SCHEMAS = {
     "acme-revoke": {
         1: ("dn", True), 4: ("serial", True), 5: ("revoke_reason", True),
         6: ("revoke_comment", False), 10: ("admin_mail", False),
+    },
+    # 登録担当者用証明書 更新申請: DN / プロファイルID / 旧証明書シリアルのみ。CSR不要
+    "ra-renew": {
+        1: ("dn", True), 2: ("profile_id", True), 4: ("serial", True),
     },
 }
 
@@ -158,6 +164,17 @@ def validate_dn(rec_no, dn, tsv_type, issues):
         issues.err(rec_no, "dn: Email属性は使用できません。")
     if values.get("C") and values["C"] != "JP":
         issues.err(rec_no, "dn: C は JP 固定です。")
+
+    if tsv_type == "ra-renew":
+        # 登録担当者用証明書: CN(氏名),OU,O,L,C。CNはFQDNではない
+        if upper != ["CN", "OU", "O", "L", "C"]:
+            issues.err(rec_no, f"dn: 登録担当者用証明書は CN,OU,O,L,C の順で記述してください"
+                               f"（現在: {','.join(attrs) if attrs else 'なし'}）。")
+        if re.search(r"\s=|=\s|,\s", dn):
+            issues.err(rec_no, "dn: 「=」の前後・「,」の後にスペースを入れないでください。")
+        if not re.fullmatch(r"[\x20-\x7E]+", dn):
+            issues.err(rec_no, "dn: 半角英数記号のみで記述してください。")
+        return values
 
     is_acme = tsv_type.startswith("acme")
     if is_acme:
@@ -319,11 +336,18 @@ def validate_record(rec_no, rec, tsv_type, issues):
     dn_values = None
     if out.get(1):
         dn_values = validate_dn(rec_no, out[1], tsv_type, issues)
-    if out.get(2) and out[2] not in PROFILE_IDS:
-        issues.err(rec_no, "profile_id: 3（RSA）または 11（ECDSA）を指定してください。")
+    if out.get(2):
+        if tsv_type == "ra-renew":
+            if out[2] not in RA_PROFILE_IDS:
+                issues.err(rec_no, "profile_id: 登録担当者用証明書は 1 を指定してください。")
+        elif out[2] not in PROFILE_IDS:
+            issues.err(rec_no, "profile_id: 3（RSA）または 11（ECDSA）を指定してください。")
     if "serial" in [schema.get(4, ("", False))[0]] and out.get(4):
         if not SERIAL_RE.match(out[4]):
             issues.err(rec_no, "serial: 10進数、または先頭に0xを付けた16進数で記述してください。")
+        elif tsv_type == "ra-renew" and out[4].lower().startswith("0x"):
+            issues.warn(rec_no, "serial: 登録担当者用証明書の更新申請は10進数での受理実績のみです。"
+                                "エクスポートの10進値をそのまま使うことを推奨します。")
     if schema.get(5) and out.get(5):
         if out[5] not in REVOKE_REASONS:
             issues.err(rec_no, "revoke_reason: 0 / 1 / 3 / 4 / 5 のいずれかを指定してください。")
